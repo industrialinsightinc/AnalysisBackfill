@@ -1,14 +1,13 @@
-﻿using OSIsoft.AF.Analysis;
-using OSIsoft.AF.Asset;
-using OSIsoft.AF.Time;
+﻿using log4net;
 using OSIsoft.AF;
+using OSIsoft.AF.Analysis;
+using OSIsoft.AF.Asset;
+using OSIsoft.AF.Search;
+using OSIsoft.AF.Time;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using OSIsoft.AF.PI;
-using OSIsoft.AF.Search;
+using System.Reflection;
 using System.Threading;
 
 /*
@@ -32,6 +31,8 @@ namespace AnalysisBackfill
 {
     class AnalysisBackfill
     {
+
+        public static readonly ILog Logger = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
         static void Main(string[] args)
         {
             //define variables
@@ -41,19 +42,18 @@ namespace AnalysisBackfill
             string user_analysisfilter = null;
             string user_mode = null;
 
-            PIServer aPIServer = null;
+            log4net.Config.XmlConfigurator.Configure();
+
             PISystems aSystems = new PISystems();
             PISystem aSystem = null;
             AFAnalysisService aAnalysisService = null;
             AFDatabase aDatabase = null;
-            List<AFElement> foundElements = new List<AFElement>(); 
+            List<AFElement> foundElements = new List<AFElement>();
             List<AFAnalysis> foundAnalyses = new List<AFAnalysis>();
-            IEnumerable<AFAnalysis> elemAnalyses = null;
 
             AFTimeRange backfillPeriod = new AFTimeRange();
 
             AFAnalysisService.CalculationMode mode = AFAnalysisService.CalculationMode.FillDataGaps;
-            String reason = null;
             Object response = null;
 
             String help_message = "This utility backfills/recalculates analyses.  Generic syntax: "
@@ -61,11 +61,11 @@ namespace AnalysisBackfill
                             + "\n This utility supports two modes: backfill and recalc.  Backfill will fill in data gaps only.  Recalc will replace all values.  Examples:"
                             + "\n\tAnalysisBackfill.exe \\\\AF1\\TestDB\\Plant1\\Pump1 FlowRate_*Avg '*-10d' '*' recalc"
                             + "\n\tAnalysisBackfill.exe \\\\AF1\\TestDB\\Plant1\\Pump1 *Rollup '*-10d' '*' backfill";
-            
+
             //bad input handling & help
             if (args.Length < 5 || args.Contains("?"))
             {
-                Console.WriteLine(help_message);
+                Logger.Info(help_message);
                 Environment.Exit(0);
             }
 
@@ -82,25 +82,6 @@ namespace AnalysisBackfill
                 aSystem = aSystems[user_serv];
                 aDatabase = aSystem.Databases[user_db];
                 aAnalysisService = aSystem.AnalysisService;
-
-                /* check versions.  need to write this. 
-                aSystem.ServerVersion
-                aSystems.Version
-                aPIServer.ServerVersion
-                */
-
-                //find AFElements
-                //will eventually include element search filter as well
-                if (inputs.Length == 4)
-                { //all elements in database
-                    foundElements = AFElement.FindElements(aDatabase, null, null, AFSearchField.Name, true, AFSortField.Name, AFSortOrder.Ascending, 1000).ToList();
-                }
-                else
-                { //single element
-                    var prelength = user_serv.Length + user_db.Length;
-                    var path1 = user_path.Substring(prelength + 4, user_path.Length - prelength - 4);
-                    foundElements.Add((AFElement)AFObject.FindObject(path1, aDatabase));
-                }
 
                 //other inputs
                 user_analysisfilter = args[1];
@@ -119,61 +100,34 @@ namespace AnalysisBackfill
                         mode = AFAnalysisService.CalculationMode.FillDataGaps;
                         break;
                     default:
-                        Console.WriteLine("Invalid mode specified.  Supported modes: backfill, recalc");
+                        Logger.Warn("Invalid mode specified.  Supported modes: backfill, recalc");
                         Environment.Exit(0);
                         break;
                 }
 
-                Console.WriteLine("Requested backfills/recalculations:");
+                Logger.Info("Requested backfills/recalculations:");
 
-                foreach (AFElement elem_n in foundElements)
-                {
-                    
-                    //find analyses
-                    String analysisfilter = "Target:=\"" + elem_n.GetPath(aDatabase) + "\" Name:=\"" + user_analysisfilter + "\"";
-                    AFAnalysisSearch analysisSearch = new AFAnalysisSearch(aDatabase, "analysisSearch", AFAnalysisSearch.ParseQuery(analysisfilter));
-                    elemAnalyses = analysisSearch.FindAnalyses(0, true).ToList();
+                String analysisfilter = "Category:'" + user_analysisfilter + "'";
+                AFAnalysisSearch analysisSearch = new AFAnalysisSearch(aDatabase, "AnalysesByCategorySearch", AFAnalysisSearch.ParseQuery(analysisfilter));
+                foundAnalyses.AddRange(analysisSearch.FindAnalyses(0, true).ToList());
 
-                    //print details to user
-                    Console.WriteLine("\tElement: " + elem_n.GetPath().ToString()
-                        + "\n\tAnalyses (" + elemAnalyses.Count() + "):");
-                    
-                    if (elemAnalyses.Count() == 0)
-                    {
-                        Console.WriteLine("\t\tNo analyses on this AF Element match the analysis filter.");
-                    }
-                    else
-                    {
-                        foundAnalyses.AddRange(elemAnalyses);
-                        foreach (var analysis_n in elemAnalyses)
-                        {
-                            Console.WriteLine("\t\t{0}, {1}, Outputs:{2}", analysis_n.Name, analysis_n.AnalysisRule.Name, analysis_n.AnalysisRule.GetOutputs().Count);
-                        }
-                    }
-
-                    /* to check for dependent analyses
-                    foreach (var analysis_n in foundAnalyses)
-                    {
-
-                    }
-                    */
-
-                }
-                Console.WriteLine("\nTime range: " + backfillPeriod.ToString() + ", " + "{0}d {1}h {2}m {3}s."
-                            , backfillPeriod.Span.Days, backfillPeriod.Span.Hours, backfillPeriod.Span.Minutes, backfillPeriod.Span.Seconds);
-                Console.WriteLine("Mode: " + user_mode + "=" + mode.ToString());
+                Logger.Info($"\nTime range: {backfillPeriod.ToString()}, {backfillPeriod.Span.Days}d {backfillPeriod.Span.Hours}h {backfillPeriod.Span.Minutes}m {backfillPeriod.Span.Seconds}s.");
+                Logger.Info("Mode: " + user_mode + "=" + mode.ToString());
                 //implement wait time
-                Console.WriteLine("\nA total of {0} analyses will be queued for processing in 10 seconds.  Press Ctrl+C to cancel.", foundAnalyses.Count);
+                Logger.Info($"\nA total of {foundAnalyses.Count} analyses will be queued for processing in 5 seconds.  Press Ctrl+C to cancel.");
                 DateTime beginWait = DateTime.Now;
-                while (!Console.KeyAvailable && DateTime.Now.Subtract(beginWait).TotalSeconds < 10)
+                while (!Console.KeyAvailable && DateTime.Now.Subtract(beginWait).TotalSeconds < 5)
                 {
                     Console.Write(".");
                     Thread.Sleep(250);
                 }
                 //no status check
-                Console.WriteLine("\n\nAll analyses have been queued.\nThere is no status check after the backfill/recalculate is queued (until AF 2.9.0). Please verify by using other means.", foundAnalyses.Count);
+                Logger.Info($"\n\nAll analyses have been queued.\nThere is no status check after the backfill/recalculate is queued (until AF 2.9.0). Please verify by using other means. {foundAnalyses.Count}");
+
+                //aAnalysisService.QueueCalculation(foundAnalyses, backfillPeriod, mode);
 
                 //queue analyses for backfill/recalc
+                // below queues them all one at a time , which is not efficient, but it is the only way to check status in AF 2.8.5
                 foreach (var analysis_n in foundAnalyses)
                 {
                     response = aAnalysisService.QueueCalculation(new List<AFAnalysis> { analysis_n }, backfillPeriod, mode);
@@ -192,18 +146,9 @@ namespace AnalysisBackfill
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error returned: " + ex.Message);
+                Logger.Warn("Error returned: " + ex.Message);
                 Environment.Exit(0);
             }
         }
-    }
-}
-
-
-public static class AFAnalysisCustom
-{
-    public static void StaticToAnalysisDR(PISystem myAFServ, AFElement myElement, AFAnalysis myAnalysis)
-    {
-        //to use later 
     }
 }
